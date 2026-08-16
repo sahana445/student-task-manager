@@ -1,7 +1,24 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
+const API = "http://127.0.0.1:5000";
+
 function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(
+    !!localStorage.getItem("token")
+  );
+
+  const [showRegister, setShowRegister] = useState(false);
+
+  const [auth, setAuth] = useState({
+    name: "",
+    email: "",
+    password: "",
+  });
+
+  const [authError, setAuthError] = useState("");
+  const [authMessage, setAuthMessage] = useState("");
+
   const [task, setTask] = useState({
     title: "",
     subject: "",
@@ -13,25 +30,147 @@ function App() {
   const [editingId, setEditingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [subjectFilter, setSubjectFilter] = useState("All");
   const [showForm, setShowForm] = useState(false);
+  const [sortOrder, setSortOrder] = useState("none");
 
-  // Get tasks
-  const fetchTasks = () => {
-    fetch("http://localhost:5000/api/tasks")
-      .then((response) => response.json())
-      .then((data) => {
-        setTasks(data);
-      })
-      .catch((error) => {
-        console.error("Error fetching tasks:", error);
+  const token = localStorage.getItem("token");
+
+  // =========================
+  // AUTHENTICATION
+  // =========================
+
+  const handleAuthChange = (e) => {
+    setAuth({
+      ...auth,
+      [e.target.name]: e.target.value,
+    });
+  };
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+
+    setAuthError("");
+    setAuthMessage("");
+
+    try {
+      const url = showRegister
+        ? `${API}/api/auth/register`
+        : `${API}/api/auth/login`;
+
+      const body = showRegister
+        ? auth
+        : {
+            email: auth.email,
+            password: auth.password,
+          };
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
       });
+
+      const text = await response.text();
+
+      let data;
+
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(
+          "Server returned an invalid response."
+        );
+      }
+
+      if (!response.ok) {
+        setAuthError(data.message || "Something went wrong");
+        return;
+      }
+
+      if (showRegister) {
+        setAuthMessage(
+          "Registration successful! Please login."
+        );
+
+        setShowRegister(false);
+
+        setAuth({
+          name: "",
+          email: auth.email,
+          password: "",
+        });
+      } else {
+        localStorage.setItem("token", data.token);
+
+        localStorage.setItem(
+          "user",
+          JSON.stringify(data.user)
+        );
+
+        setIsLoggedIn(true);
+      }
+    } catch (error) {
+      console.error("AUTH ERROR:", error);
+      setAuthError(error.message);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+
+    setIsLoggedIn(false);
+    setTasks([]);
+  };
+
+  // =========================
+  // FETCH TASKS
+  // =========================
+
+  const fetchTasks = async () => {
+    const savedToken = localStorage.getItem("token");
+
+    if (!savedToken) return;
+
+    try {
+      const response = await fetch(`${API}/api/tasks`, {
+        headers: {
+          Authorization: `Bearer ${savedToken}`,
+        },
+      });
+
+      if (
+        response.status === 401 ||
+        response.status === 403
+      ) {
+        handleLogout();
+        return;
+      }
+
+      const data = await response.json();
+
+      if (Array.isArray(data)) {
+        setTasks(data);
+      }
+    } catch (error) {
+      console.error("Error fetching tasks:", error);
+    }
   };
 
   useEffect(() => {
-    fetchTasks();
-  }, []);
+    if (isLoggedIn) {
+      fetchTasks();
+    }
+  }, [isLoggedIn]);
 
-  // Handle form input
+  // =========================
+  // TASK FORM
+  // =========================
+
   const handleChange = (e) => {
     setTask({
       ...task,
@@ -39,46 +178,39 @@ function App() {
     });
   };
 
-  // Add or update task
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (editingId) {
-      fetch(`http://localhost:5000/api/tasks/${editingId}`, {
-        method: "PUT",
+    try {
+      const url = editingId
+        ? `${API}/api/tasks/${editingId}`
+        : `${API}/api/tasks`;
+
+      const method = editingId ? "PUT" : "POST";
+
+      const response = await fetch(url, {
+        method,
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(task),
-      })
-        .then((response) => response.json())
-        .then(() => {
-          resetForm();
-          fetchTasks();
-        })
-        .catch((error) => {
-          console.error("Error updating task:", error);
-        });
-    } else {
-      fetch("http://localhost:5000/api/tasks", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(task),
-      })
-        .then((response) => response.json())
-        .then(() => {
-          resetForm();
-          fetchTasks();
-        })
-        .catch((error) => {
-          console.error("Error adding task:", error);
-        });
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message);
+      }
+
+      resetForm();
+      fetchTasks();
+    } catch (error) {
+      console.error("Error saving task:", error);
+      alert(error.message);
     }
   };
 
-  // Reset form
   const resetForm = () => {
     setTask({
       title: "",
@@ -91,71 +223,90 @@ function App() {
     setShowForm(false);
   };
 
-  // Edit task
   const handleEdit = (item) => {
-    setTask({
-      title: item.title,
-      subject: item.subject,
-      deadline: item.deadline,
-      priority: item.priority,
-    });
+  setTask({
+    title: item.title || "",
+    subject: item.subject || "",
+    deadline: item.deadline || "",
+    priority: item.priority || "Medium",
+  });
 
-    setEditingId(item._id);
-    setShowForm(true);
+  setEditingId(item._id);
+  setShowForm(true);
+};
+
+  const handleDelete = async (id) => {
+    try {
+      const response = await fetch(
+        `${API}/api/tasks/${id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to delete task");
+      }
+
+      fetchTasks();
+    } catch (error) {
+      console.error("Error deleting task:", error);
+    }
   };
 
-  // Delete task
-  const handleDelete = (id) => {
-    fetch(`http://localhost:5000/api/tasks/${id}`, {
-      method: "DELETE",
-    })
-      .then((response) => response.json())
-      .then(() => {
-        fetchTasks();
-      })
-      .catch((error) => {
-        console.error("Error deleting task:", error);
-      });
+  const handleComplete = async (item) => {
+    try {
+      const response = await fetch(
+        `${API}/api/tasks/${item._id}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            title: item.title,
+            subject: item.subject,
+            deadline: item.deadline,
+            priority: item.priority,
+            status: "Completed",
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to complete task");
+      }
+
+      fetchTasks();
+    } catch (error) {
+      console.error("Error completing task:", error);
+    }
   };
 
-  // Mark completed
-  const handleComplete = (item) => {
-    fetch(`http://localhost:5000/api/tasks/${item._id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        title: item.title,
-        subject: item.subject,
-        deadline: item.deadline,
-        priority: item.priority,
-        status: "Completed",
-      }),
-    })
-      .then((response) => response.json())
-      .then(() => {
-        fetchTasks();
-      })
-      .catch((error) => {
-        console.error("Error completing task:", error);
-      });
-  };
+  // =========================
+  // DEADLINE STATUS
+  // =========================
 
-  // Deadline status
   const getDeadlineStatus = (item) => {
     if (item.status === "Completed") {
       return "Completed";
     }
 
     const today = new Date();
+
     today.setHours(0, 0, 0, 0);
 
     const deadline = new Date(item.deadline);
+
     deadline.setHours(0, 0, 0, 0);
 
     const difference =
-      (deadline - today) / (1000 * 60 * 60 * 24);
+      (deadline - today) /
+      (1000 * 60 * 60 * 24);
 
     if (difference < 0) {
       return "Overdue";
@@ -168,8 +319,19 @@ function App() {
     return "Upcoming";
   };
 
-  // Search + filter
-  const filteredTasks = tasks.filter((item) => {
+  // =========================
+  // FILTERS
+  // =========================
+
+  const subjects = [
+    ...new Set(
+      tasks
+        .map((item) => item.subject)
+        .filter(Boolean)
+    ),
+  ];
+
+  let filteredTasks = tasks.filter((item) => {
     const search = searchTerm.toLowerCase();
 
     const matchesSearch =
@@ -180,45 +342,285 @@ function App() {
       priorityFilter === "All" ||
       item.priority === priorityFilter;
 
-    return matchesSearch && matchesPriority;
+    const matchesStatus =
+      statusFilter === "All" ||
+      (statusFilter === "Pending"
+        ? item.status !== "Completed"
+        : item.status === "Completed");
+
+    const matchesSubject =
+      subjectFilter === "All" ||
+      item.subject === subjectFilter;
+
+    return (
+      matchesSearch &&
+      matchesPriority &&
+      matchesStatus &&
+      matchesSubject
+    );
   });
 
-  // Statistics
+  if (sortOrder === "ascending") {
+    filteredTasks = [...filteredTasks].sort(
+      (a, b) =>
+        new Date(a.deadline) -
+        new Date(b.deadline)
+    );
+  }
+
+  if (sortOrder === "descending") {
+    filteredTasks = [...filteredTasks].sort(
+      (a, b) =>
+        new Date(b.deadline) -
+        new Date(a.deadline)
+    );
+  }
+
+  // =========================
+  // ANALYTICS
+  // =========================
+
   const totalTasks = tasks.length;
 
   const completedTasks = tasks.filter(
     (item) => item.status === "Completed"
   ).length;
 
-  const pendingTasks = totalTasks - completedTasks;
+  const pendingTasks =
+    totalTasks - completedTasks;
 
   const overdueTasks = tasks.filter(
-    (item) => getDeadlineStatus(item) === "Overdue"
+    (item) =>
+      getDeadlineStatus(item) === "Overdue"
   ).length;
+
+  const completionPercentage =
+    totalTasks === 0
+      ? 0
+      : Math.round(
+          (completedTasks / totalTasks) * 100
+        );
+
+  const upcomingTasks = tasks
+    .filter(
+      (item) =>
+        item.status !== "Completed" &&
+        getDeadlineStatus(item) === "Upcoming"
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.deadline) -
+        new Date(b.deadline)
+    )
+    .slice(0, 5);
+
+  const dueSoonTasks = tasks
+    .filter(
+      (item) =>
+        item.status !== "Completed" &&
+        getDeadlineStatus(item) === "Due Soon"
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.deadline) -
+        new Date(b.deadline)
+    );
+
+  const overdueTasksList = tasks
+    .filter(
+      (item) =>
+        item.status !== "Completed" &&
+        getDeadlineStatus(item) === "Overdue"
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.deadline) -
+        new Date(b.deadline)
+    );
+
+  // =========================
+  // LOGIN / REGISTER PAGE
+  // =========================
+
+  if (!isLoggedIn) {
+    return (
+      <div className="auth-page">
+
+        <div className="auth-card">
+
+          <div className="auth-logo">
+            📚
+          </div>
+
+          <h1>
+            Student Task Manager
+          </h1>
+
+          <p className="auth-subtitle">
+            {showRegister
+              ? "Create your account"
+              : "Welcome back! Login to continue"}
+          </p>
+
+          {authError && (
+            <div className="auth-error">
+              ⚠️ {authError}
+            </div>
+          )}
+
+          {authMessage && (
+            <div className="auth-success">
+              ✓ {authMessage}
+            </div>
+          )}
+
+          <form onSubmit={handleAuth}>
+
+            {showRegister && (
+              <div className="auth-group">
+
+                <label>
+                  Full Name
+                </label>
+
+                <input
+                  type="text"
+                  name="name"
+                  placeholder="Enter your name"
+                  value={auth.name}
+                  onChange={handleAuthChange}
+                  required
+                />
+
+              </div>
+            )}
+
+            <div className="auth-group">
+
+              <label>
+                Email
+              </label>
+
+              <input
+                type="email"
+                name="email"
+                placeholder="Enter your email"
+                value={auth.email}
+                onChange={handleAuthChange}
+                required
+              />
+
+            </div>
+
+            <div className="auth-group">
+
+              <label>
+                Password
+              </label>
+
+              <input
+                type="password"
+                name="password"
+                placeholder="Minimum 6 characters"
+                value={auth.password}
+                onChange={handleAuthChange}
+                required
+                minLength="6"
+              />
+
+            </div>
+
+            <button
+              type="submit"
+              className="auth-button"
+            >
+              {showRegister
+                ? "Create Account"
+                : "Login"}
+            </button>
+
+          </form>
+
+          <div className="auth-switch">
+
+            {showRegister
+              ? "Already have an account?"
+              : "Don't have an account?"}
+
+            <button
+              type="button"
+              onClick={() => {
+                setShowRegister(!showRegister);
+                setAuthError("");
+                setAuthMessage("");
+              }}
+            >
+              {showRegister
+                ? " Login"
+                : " Register"}
+            </button>
+
+          </div>
+
+        </div>
+
+      </div>
+    );
+  }
+
+  // =========================
+  // DASHBOARD
+  // =========================
+
+  const user = JSON.parse(
+    localStorage.getItem("user") || "{}"
+  );
 
   return (
     <div className="app">
+
       <div className="container">
 
-        {/* Header */}
         <div className="header">
+
           <div className="logo-section">
-            <h1>📚 Student Task Manager</h1>
-            <p>Stay organized and never miss an assignment.</p>
+
+            <h1>
+              📚 Student Task Manager
+            </h1>
+
+            <p>
+              Welcome back,{" "}
+              {user.name || "Student"}!
+            </p>
+
           </div>
 
-          <button
-            className="add-button"
-            onClick={() => {
-              setShowForm(true);
-              setEditingId(null);
-            }}
-          >
-            + Add New Task
-          </button>
+          <div className="header-actions">
+
+            <button
+              className="add-button"
+              onClick={() => {
+                setShowForm(true);
+                setEditingId(null);
+              }}
+            >
+              + Add New Task
+            </button>
+
+            <button
+              className="logout-button"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
+
+          </div>
+
         </div>
 
-        {/* Statistics */}
+        {/* STATISTICS */}
+
         <div className="stats">
 
           <div className="stat-card">
@@ -241,14 +643,87 @@ function App() {
             <p>Overdue</p>
           </div>
 
+          <div className="stat-card">
+            <h3>
+              {completionPercentage}%
+            </h3>
+            <p>Completion</p>
+          </div>
+
         </div>
 
-        {/* Add/Edit Form */}
+        {/* PROGRESS */}
+
+        <div className="progress-card">
+
+          <div className="progress-header">
+
+            <div>
+
+              <h3>
+                📊 Overall Progress
+              </h3>
+
+              <p>
+                {completedTasks} of{" "}
+                {totalTasks} tasks completed
+              </p>
+
+            </div>
+
+            <strong>
+              {completionPercentage}%
+            </strong>
+
+          </div>
+
+          <div className="progress-bar">
+
+            <div
+              className="progress-fill"
+              style={{
+                width:
+                  `${completionPercentage}%`,
+              }}
+            />
+
+          </div>
+
+        </div>
+
+        {/* DEADLINES */}
+
+        <div className="deadline-grid">
+
+          <DeadlineCard
+            title="📅 Upcoming"
+            subtitle="Deadlines after 2 days"
+            tasks={upcomingTasks}
+          />
+
+          <DeadlineCard
+            title="⏳ Due Soon"
+            subtitle="Due within 2 days"
+            tasks={dueSoonTasks}
+          />
+
+          <DeadlineCard
+            title="⚠️ Overdue"
+            subtitle="Past deadlines"
+            tasks={overdueTasksList}
+          />
+
+        </div>
+
+        {/* FORM */}
+
         {showForm && (
           <div className="form-container">
 
             <h2>
-              {editingId ? "Edit Task" : "Add New Task"}
+              {editingId
+                ? "Edit Task"
+                : "Add New Task"}
             </h2>
 
             <form onSubmit={handleSubmit}>
@@ -256,7 +731,10 @@ function App() {
               <div className="form-grid">
 
                 <div className="form-group">
-                  <label>Task Title</label>
+
+                  <label>
+                    Task Title
+                  </label>
 
                   <input
                     type="text"
@@ -266,10 +744,14 @@ function App() {
                     onChange={handleChange}
                     required
                   />
+
                 </div>
 
                 <div className="form-group">
-                  <label>Subject</label>
+
+                  <label>
+                    Subject
+                  </label>
 
                   <input
                     type="text"
@@ -279,10 +761,14 @@ function App() {
                     onChange={handleChange}
                     required
                   />
+
                 </div>
 
                 <div className="form-group">
-                  <label>Deadline</label>
+
+                  <label>
+                    Deadline
+                  </label>
 
                   <input
                     type="date"
@@ -291,20 +777,35 @@ function App() {
                     onChange={handleChange}
                     required
                   />
+
                 </div>
 
                 <div className="form-group">
-                  <label>Priority</label>
+
+                  <label>
+                    Priority
+                  </label>
 
                   <select
                     name="priority"
                     value={task.priority}
                     onChange={handleChange}
                   >
-                    <option value="Low">Low</option>
-                    <option value="Medium">Medium</option>
-                    <option value="High">High</option>
+
+                    <option value="Low">
+                      Low
+                    </option>
+
+                    <option value="Medium">
+                      Medium
+                    </option>
+
+                    <option value="High">
+                      High
+                    </option>
+
                   </select>
+
                 </div>
 
               </div>
@@ -315,7 +816,9 @@ function App() {
                   type="submit"
                   className="submit-btn"
                 >
-                  {editingId ? "Update Task" : "Add Task"}
+                  {editingId
+                    ? "Update Task"
+                    : "Add Task"}
                 </button>
 
                 <button
@@ -329,13 +832,16 @@ function App() {
               </div>
 
             </form>
+
           </div>
         )}
 
-        {/* Search and Filter */}
+        {/* SEARCH / FILTER */}
+
         <div className="controls">
 
           <div className="search-box">
+
             <input
               type="text"
               placeholder="🔍 Search tasks or subjects..."
@@ -344,33 +850,136 @@ function App() {
                 setSearchTerm(e.target.value)
               }
             />
+
           </div>
 
           <div className="filter">
+
             <select
               value={priorityFilter}
               onChange={(e) =>
                 setPriorityFilter(e.target.value)
               }
             >
-              <option value="All">All Priorities</option>
-              <option value="High">High Priority</option>
-              <option value="Medium">Medium Priority</option>
-              <option value="Low">Low Priority</option>
+
+              <option value="All">
+                All Priorities
+              </option>
+
+              <option value="High">
+                High Priority
+              </option>
+
+              <option value="Medium">
+                Medium Priority
+              </option>
+
+              <option value="Low">
+                Low Priority
+              </option>
+
             </select>
+
+          </div>
+
+          <div className="filter">
+
+            <select
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(e.target.value)
+              }
+            >
+
+              <option value="All">
+                All Status
+              </option>
+
+              <option value="Pending">
+                Pending
+              </option>
+
+              <option value="Completed">
+                Completed
+              </option>
+
+            </select>
+
+          </div>
+
+          <div className="filter">
+
+            <select
+              value={subjectFilter}
+              onChange={(e) =>
+                setSubjectFilter(e.target.value)
+              }
+            >
+
+              <option value="All">
+                All Subjects
+              </option>
+
+              {subjects.map((subject) => (
+                <option
+                  key={subject}
+                  value={subject}
+                >
+                  {subject}
+                </option>
+              ))}
+
+            </select>
+
+          </div>
+
+          <div className="filter">
+
+            <select
+              value={sortOrder}
+              onChange={(e) =>
+                setSortOrder(e.target.value)
+              }
+            >
+
+              <option value="none">
+                Sort by Deadline
+              </option>
+
+              <option value="ascending">
+                Earliest First
+              </option>
+
+              <option value="descending">
+                Latest First
+              </option>
+
+            </select>
+
           </div>
 
         </div>
 
-        {/* Task List */}
+        {/* TASK LIST */}
+
         <div className="task-list">
 
           {filteredTasks.length === 0 ? (
+
             <div className="empty">
-              <h3>No tasks found</h3>
-              <p>Add a new task to get started.</p>
+
+              <h3>
+                No tasks found
+              </h3>
+
+              <p>
+                Add a new task to get started.
+              </p>
+
             </div>
+
           ) : (
+
             filteredTasks.map((item) => {
 
               const deadlineStatus =
@@ -385,29 +994,39 @@ function App() {
                   <div className="task-header">
 
                     <div>
-                      <h3>{item.title}</h3>
+
+                      <h3>
+                        {item.title}
+                      </h3>
 
                       <p className="subject">
                         {item.subject}
                       </p>
+
                     </div>
 
                     <div className="badges">
 
                       <span
-                        className={`badge ${item.priority.toLowerCase()}`}
+                        className={
+                          `badge ${item.priority.toLowerCase()}`
+                        }
                       >
                         {item.priority}
                       </span>
 
                       <span
-                        className={`badge ${
-                          item.status === "Completed"
-                            ? "completed"
-                            : "pending"
-                        }`}
+                        className={
+                          `badge ${
+                            item.status ===
+                            "Completed"
+                              ? "completed"
+                              : "pending"
+                          }`
+                        }
                       >
-                        {item.status || "Pending"}
+                        {item.status ||
+                          "Pending"}
                       </span>
 
                     </div>
@@ -422,26 +1041,42 @@ function App() {
 
                     <span
                       className={
-                        deadlineStatus === "Overdue"
+                        deadlineStatus ===
+                        "Overdue"
                           ? "overdue"
-                          : deadlineStatus === "Due Soon"
+                          : deadlineStatus ===
+                            "Due Soon"
                           ? "due-soon"
-                          : deadlineStatus === "Upcoming"
+                          : deadlineStatus ===
+                            "Upcoming"
                           ? "upcoming"
                           : ""
                       }
                     >
-                      {deadlineStatus === "Overdue" && "⚠️ "}
-                      {deadlineStatus === "Due Soon" && "⏳ "}
-                      {deadlineStatus === "Upcoming" && "🟢 "}
+
+                      {deadlineStatus ===
+                        "Overdue" &&
+                        "⚠️ "}
+
+                      {deadlineStatus ===
+                        "Due Soon" &&
+                        "⏳ "}
+
+                      {deadlineStatus ===
+                        "Upcoming" &&
+                        "🟢 "}
+
                       {deadlineStatus}
+
                     </span>
 
                   </div>
 
                   <div className="task-actions">
 
-                    {item.status !== "Completed" && (
+                    {item.status !==
+                      "Completed" && (
+
                       <button
                         className="complete-btn"
                         onClick={() =>
@@ -450,6 +1085,7 @@ function App() {
                       >
                         ✓ Complete
                       </button>
+
                     )}
 
                     <button
@@ -475,11 +1111,79 @@ function App() {
                 </div>
               );
             })
+
           )}
 
         </div>
 
       </div>
+
+    </div>
+  );
+}
+
+
+// =========================
+// DEADLINE CARD
+// =========================
+
+function DeadlineCard({
+  title,
+  subtitle,
+  tasks,
+}) {
+  return (
+    <div className="deadline-card">
+
+      <div className="deadline-card-header">
+
+        <div>
+
+          <h2>{title}</h2>
+
+          <p>{subtitle}</p>
+
+        </div>
+
+        <span className="deadline-number">
+          {tasks.length}
+        </span>
+
+      </div>
+
+      {tasks.length === 0 ? (
+
+        <div className="deadline-empty">
+          No tasks
+        </div>
+
+      ) : (
+
+        tasks.map((item) => (
+
+          <div
+            className="deadline-item"
+            key={item._id}
+          >
+
+            <div>
+
+              <h3>{item.title}</h3>
+
+              <p>{item.subject}</p>
+
+            </div>
+
+            <span>
+              📅 {item.deadline}
+            </span>
+
+          </div>
+
+        ))
+
+      )}
+
     </div>
   );
 }
